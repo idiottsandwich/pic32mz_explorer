@@ -1,11 +1,28 @@
 /************************************************************************
  * PIC32MZ2048EFH100 learning 
+ * Configuring DMA pattern matching to switch FSM state on RX of a specific char
+ * Using Explorer 16/32 board
+ * 
  * Written by Calvin Lin
  * 
  * Copyright (C) 2022
  * This code is intended to be a open source demo 
  * and is to be used for educational purposes only. 
  * Suggestions/constructive criticisms are welcome. 
+ * 
+ * Redistribution and use in source and binary forms, with or without 
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, 
+ * this list of conditions and the following disclaimer in the documentation 
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors 
+ * may be used to endorse or promote products derived from this software without 
+ * specific prior written permission.
  ************************************************************************
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
  * CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
@@ -88,11 +105,15 @@
 #include <math.h>
 #include <sys/attribs.h>
 #include <sys/kmem.h>
+#include <stdbool.h>
 
 #define SYS_FREQ 200000000UL
+#define UNLOCK_LED LATAbits.LATA3
 
 // DMA transfer buffer 
 volatile unsigned char __attribute__((coherent)) ramBuffer[200];
+volatile bool unlock;
+volatile char c;
 
 void delay_us(unsigned int us) {
     // Convert microseconds us into how many clock ticks it will take
@@ -106,28 +127,29 @@ void delay_us(unsigned int us) {
 // ISR
 void __ISR(_DMA4_VECTOR, IPL7SRS) DMA4_ISR(void)
 {
+    // if pattern match, switch states and reset DMA 
+    c = U1RXREG;
+    U1TXREG = 'u';
+    DCH4INTCLR = 0x000000ff;
     IFS4CLR = _IFS4_DMA4IF_MASK;
-    // if finished, start again
- 
-    // if pattern matched, write out response
-    
-    U1TXREG = 'l';
+    IFS4bits.DMA4IF = 0;
+    unlock = true;
+    DCH4CONbits.CHEN = 1;
+
 }
-
-
-// end ISR
-
-char c;
 
 int main(int argc, char** argv) 
 {
-          
-    // configure PBCLOCK2
+    // configure PBCLOCK2 which runs UART
     SYSKEY = 0xAA996655;
     SYSKEY = 0x556699AA;
     PB2DIVbits.PBDIV = 4;    // 40MHz PB2DIV
     PB2DIVbits.ON = 1;    
     SYSKEY = 0;
+    
+    //LED
+    TRISAbits.TRISA3 = 0;
+    UNLOCK_LED = 0;
        
     // configure UART
     // PPS
@@ -139,41 +161,22 @@ int main(int argc, char** argv)
     U1MODE = 0;
     U1STAbits.URXEN = 1;
     U1STAbits.UTXEN = 1;
-    U1BRG = 9; //250k
+    U1BRG = 9; //250kb
     U1MODEbits.ON = 1;
-    
-    // configure UART interrupts
-    //IPC28SET = 0x1700;
-    // = _IEC3_U1RXIE_MASK;
 
     //configure DMA
-    //IEC1CLR = 0x00010000; // disable DMA channel 0 interrupts
-    //IFS1CLR = 0x00010000; // clear existing DMA channel 0 interrupt flag
     IFS4CLR = _IFS4_DMA4IF_MASK;
-    IEC4CLR = _IEC4_DMA4IE_MASK;   
-    
-    DMACONSET = 0x00008000; // enable the DMA controller
-    
+    IEC4CLR = _IEC4_DMA4IE_MASK;       
     DMACONbits.ON = 1;
-    DCH4CON = 0x3; // channel off, priority 3, no chaining
-    //DCH4CONbits.CHAEN = 1;
-    DCH4CONbits.CHPATLEN = 0; // pattern length 2 bytes
-    
+    DCH4CON = 0x3; 
+    DCH4CONbits.CHPATLEN = 0; // pattern length 1 byte
     DCH4ECON = 0; 
     DCH4ECONbits.PATEN = 1;
     DCH4ECONbits.CHSIRQ = _UART1_RX_VECTOR;
     DCH4ECONbits.SIRQEN = 1;
+    DCH4INTbits.CHBCIE = 1;
     
-    DCH4DAT = '?';
-//    DCH4INT.CHDDIE = 1;
-    
-//    // program the transfer
-//    DCH4SSA = KVA_TO_PA(flashBuff); // transfer source physical address
-//    DCH4DSA = KVA_TO_PA(ramBuff); // transfer destination physical address
-//    DCH4SSIZ = 200; // source size 200 bytes
-//    DCH4DSIZ = 200; // destination size 200 bytes
-//    DCH4CSIZ = 200; // 200 bytes transferred per event
-//    DCH4INTCLR = 0x00ff00ff; // clear existing events,
+    DCH4DAT = 0x3f; // '?' / dec 63 / hex 0x3F -- not able to get two byte match working yet
     
     // set dma interrupts
     DCH4SSA = KVA_TO_PA((void *)U1RXREG); // transfer source physical address
@@ -185,21 +188,24 @@ int main(int argc, char** argv)
     // clear priority and sub priority     
     IPC34SET = 0x160000; // priority 5, sub-priority 2 
     IEC4SET = _IEC4_DMA4IE_MASK;
-    DCH4CONbits.CHEN = 1;
     
-    PRISS = 0x76543210;               
- 
-    INTCONSET = _INTCON_MVEC_MASK;    
+    PRISS = 0x76543210; 
+    INTCONSET = _INTCON_MVEC_MASK;   
+    DCH4CONbits.CHEN = 1; 
     
     __builtin_enable_interrupts(); 
+    
     while(1)
-    {
-        
-        if (U1STAbits.URXDA)
+    {       
+        if (unlock)
         {
-            //c = U1RXREG;
+            unlock = false;
+            UNLOCK_LED = 1;
         }
-  
+        else 
+        {
+            
+        }
     }
 
     return(EXIT_SUCCESS);
